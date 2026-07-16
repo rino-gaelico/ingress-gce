@@ -45,6 +45,8 @@ type syncerTester struct {
 	syncCount int
 	// syncError is true, then sync function return error
 	syncError bool
+	// customError is returned by the sync function if not nil
+	customError error
 	// blockSync is true, then sync function is blocked on channel
 	blockSync bool
 	ch        chan interface{}
@@ -56,6 +58,9 @@ func (t *syncerTester) sync() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.syncCount += 1
+	if t.customError != nil {
+		return t.customError
+	}
 	if t.syncError {
 		return fmt.Errorf("sync error")
 	}
@@ -180,5 +185,32 @@ func TestRetryOnSyncError(t *testing.T) {
 	syncerTester.mu.Unlock()
 	if syncCount != maxRetry+1 {
 		t.Errorf("Expect sync count to be %v, but got %v", maxRetry+1, syncCount)
+	}
+}
+
+func TestRetryOnStrategyQuotaErrorSpin(t *testing.T) {
+	maxRetry := 100
+	syncerTester := newSyncerTester()
+	syncerTester.mu.Lock()
+	syncerTester.customError = negtypes.StrategyQuotaError{Err: fmt.Errorf("quota error")}
+	syncerTester.mu.Unlock()
+
+	syncerTester.syncer.(*syncer).backoff = backoff.NewExponentialBackoffHandler(maxRetry, 0, 0)
+
+	if err := syncerTester.syncer.Start(); err != nil {
+		t.Fatalf("Failed to start syncer: %v", err)
+	}
+
+	// Wait briefly to allow the zero-delay tight loop to spin
+	time.Sleep(100 * time.Millisecond)
+
+	syncerTester.syncer.Stop()
+
+	syncerTester.mu.Lock()
+	syncCount := syncerTester.syncCount
+	syncerTester.mu.Unlock()
+
+	if syncCount > maxRetry+1 {
+		t.Errorf("Syncer is spinning! Expected at most %v retries, but got %v. Zero-delay loop detected.", maxRetry+1, syncCount)
 	}
 }

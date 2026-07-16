@@ -97,6 +97,8 @@ func (s *syncer) Start() error {
 				delay, retryErr := time.Duration(0), error(nil)
 				if !negtypes.IsStrategyQuotaError(err) {
 					delay, retryErr = s.backoff.NextDelay()
+				} else {
+					delay = minRetryDelay
 				}
 				retryMsg := ""
 				if retryErr == backoff.ErrRetriesExceeded {
